@@ -73,5 +73,5 @@ jobs:
     - uses: actions/checkout@v3
     - name: make
       run: |
-        yum -y install gcc make
+        yum -y install gcc gcc-c++ make
         make REDIS_CFLAGS='-Werror'
