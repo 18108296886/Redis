@@ -576,9 +576,6 @@ int string2d(const char *s, size_t slen, double *dp) {
     errno = 0;
     char *eptr;
     *dp = fast_float_strtod(s, &eptr);
-    printf("%f\n", *dp);
-    printf("%s\n", s);
-    printf("%s\n", eptr);
     if (slen == 0 ||
         isspace(((const char*)s)[0]) ||
         (size_t)(eptr-(char*)s) != slen ||
