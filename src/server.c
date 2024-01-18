@@ -97,6 +97,7 @@ static inline int isShutdownInitiated(void);
 int isReadyToShutdown(void);
 int finishShutdown(void);
 const char *replstateToString(int replstate);
+sds appendIOTHreadsInfoString(sds info); /* implemented in networking.c */
 
 /*============================ Utility functions ============================ */
 
@@ -852,7 +853,9 @@ long long getInstantaneousMetric(int metric) {
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeQueryBuffer(client *c) {
     size_t querybuf_size = sdsalloc(c->querybuf);
-    time_t idletime = server.unixtime - c->lastinteraction;
+    time_t lastinteraction;
+    atomicGet(c->lastinteraction, lastinteraction);
+    time_t idletime = server.unixtime - lastinteraction;
 
     /* Only resize the query buffer if the buffer is actually wasting at least a
      * few kbytes */
@@ -1046,7 +1049,6 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction) {
  * returns 1 if client eviction for this client is allowed, 0 otherwise.
  */
 int updateClientMemUsageAndBucket(client *c) {
-    serverAssert(io_threads_op == IO_THREADS_OP_IDLE);
     int allow_eviction = clientEvictionAllowed(c);
     removeClientFromMemUsageBucket(c, allow_eviction);
 
@@ -1146,8 +1148,13 @@ void clientsCron(void) {
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c,now)) continue;
-        if (clientsCronResizeQueryBuffer(c)) continue;
+        if (c->io_thread_index < 0 && clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c,now)) continue;
+
+        /* There are data races getting client memory usage and tracking
+         * expensive clients, so skip that if the client is pinned to an I/O
+         * thread. */
+        if (c->io_thread_index >= 0) continue;
 
         if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) continue;
 
@@ -1745,8 +1752,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
      * events to handle. */
     if (ProcessingEventsWhileBlocked) {
         uint64_t processed = 0;
-        processed += handleClientsWithPendingReadsUsingThreads();
-        processed += connTypeProcessPendingData();
+        processed += connTypeProcessPendingData(server.el);
         if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE)
             flushAppendOnlyFile(0);
         processed += handleClientsWithPendingWrites();
@@ -1755,14 +1761,13 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         return;
     }
 
-    /* We should handle pending reads clients ASAP after event loop. */
-    handleClientsWithPendingReadsUsingThreads();
-
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
-    connTypeProcessPendingData();
+    connTypeProcessPendingData(server.el);
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
-    int dont_sleep = connTypeHasPendingData();
+    int dont_sleep = connTypeHasPendingData(server.el);
+
+    if (server.io_threads_active) handleMessagesFromIOThreads();
 
     /* Call the Redis Cluster before sleep function. Note that this function
      * may change the state of Redis Cluster (from ok to fail or vice versa),
@@ -1828,7 +1833,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     long long prev_fsynced_reploff = server.fsynced_reploff;
 
     /* Write the AOF buffer on disk,
-     * must be done before handleClientsWithPendingWritesUsingThreads,
+     * must be done before handleClientsWithPendingWrites,
      * in case of appendfsync=always. */
     if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE)
         flushAppendOnlyFile(0);
@@ -1851,7 +1856,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWritesUsingThreads();
+    handleClientsWithPendingWrites();
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1866,6 +1871,18 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Disconnect some clients if they are consuming too much memory. */
     evictClients();
+
+    if (server.io_threads_active) {
+        /* Empty the inbox from I/O threads. */
+        handleMessagesFromIOThreads();
+        atomicSetWithSync(server.sleeping, 1);
+        /* Handle any messages sent before we set the sleeping flag. */
+        handleMessagesFromIOThreads();
+        if (listLength(server.clients_pending_write) > 0) {
+            /* We need to send these after fsynching the AOF next time. */
+            dont_sleep = 1;
+        }
+    }
 
     /* Record cron time in beforeSleep. */
     monotime duration_after_write = getMonotonicUs() - cron_start_time_after_write;
@@ -1937,6 +1954,8 @@ void afterSleep(struct aeEventLoop *eventLoop) {
     if (!ProcessingEventsWhileBlocked) {
         server.cmd_time_snapshot = server.mstime;
     }
+
+    atomicSet(server.sleeping, 0);
 }
 
 /* =========================== Server initialization ======================== */
@@ -2720,7 +2739,6 @@ void initServer(void) {
     server.slaves = listCreate();
     server.monitors = listCreate();
     server.clients_pending_write = listCreate();
-    server.clients_pending_read = listCreate();
     server.clients_timeout_table = raxNew();
     server.replication_allowed = 1;
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
@@ -2762,6 +2780,7 @@ void initServer(void) {
             strerror(errno));
         exit(1);
     }
+    atomicSet(server.sleeping, 0);
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
 
     /* Create the Redis databases, and initialize other internal state. */
@@ -4343,6 +4362,17 @@ void closeListeningSockets(int unlink_unix_socket) {
     }
 }
 
+void debugShutdown(void) {
+    sds info = appendIOTHreadsInfoString(sdsempty());
+    serverLogRaw(LL_WARNING|LL_RAW, "\n------ I/O theads info ------\n");
+    serverLogRaw(LL_WARNING|LL_RAW, info);
+    serverLogRaw(LL_WARNING|LL_RAW, "\n-----------------------------\n");
+    sds clients = getAllClientsInfoString(-1);
+    serverLogRaw(LL_WARNING|LL_RAW, clients);
+    sdsfree(info);
+    sdsfree(clients);
+}
+
 /* Prepare for shutting down the server. Flags:
  *
  * - SHUTDOWN_SAVE: Save a database dump even if the server is configured not to
@@ -4381,6 +4411,8 @@ int prepareForShutdown(int flags) {
     server.shutdown_flags = flags;
 
     serverLog(LL_NOTICE,"User requested shutdown...");
+    debugShutdown();
+
     if (server.supervised_mode == SUPERVISED_SYSTEMD)
         redisCommunicateSystemd("STOPPING=1\n");
 
@@ -5656,6 +5688,8 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
             "config_file:%s\r\n", server.configfile ? server.configfile : "",
             "io_threads_active:%i\r\n", server.io_threads_active));
 
+        info = appendIOTHreadsInfoString(info);
+
         /* Conditional properties */
         if (isShutdownInitiated()) {
             info = sdscatfmt(info,
@@ -5973,11 +6007,17 @@ sds genRedisInfoString(dict *section_dict, int all_sections, int everything) {
                 slave_read_repl_offset = server.cached_master->read_reploff;
             }
 
+            int master_last_io_seconds_ago = -1;
+            if (server.master) {
+                time_t lastinteraction;
+                atomicGet(server.master->lastinteraction, lastinteraction);
+                master_last_io_seconds_ago = (int)(server.unixtime - lastinteraction);
+            }
             info = sdscatprintf(info, FMTARGS(
                 "master_host:%s\r\n", server.masterhost,
                 "master_port:%d\r\n", server.masterport,
                 "master_link_status:%s\r\n", (server.repl_state == REPL_STATE_CONNECTED) ? "up" : "down",
-                "master_last_io_seconds_ago:%d\r\n", server.master ? ((int)(server.unixtime-server.master->lastinteraction)) : -1,
+                "master_last_io_seconds_ago:%d\r\n", master_last_io_seconds_ago,
                 "master_sync_in_progress:%d\r\n", server.repl_state == REPL_STATE_TRANSFER,
                 "slave_read_repl_offset:%lld\r\n", slave_read_repl_offset,
                 "slave_repl_offset:%lld\r\n", slave_repl_offset));
@@ -6898,6 +6938,7 @@ int iAmMaster(void) {
 #ifdef REDIS_TEST
 #include "testhelp.h"
 #include "intset.h"  /* Compact integer set structure */
+#include "atomicqueue.h"
 
 int __failed_tests = 0;
 int __test_num = 0;
@@ -6922,7 +6963,8 @@ struct redisTest {
     {"zmalloc", zmalloc_test},
     {"sds", sdsTest},
     {"dict", dictTest},
-    {"listpack", listpackTest}
+    {"listpack", listpackTest},
+    {"atomicqueue", atomicqueueTest}
 };
 redisTestProc *getTestProcByName(const char *name) {
     int numtests = sizeof(redisTests)/sizeof(struct redisTest);

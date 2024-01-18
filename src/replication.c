@@ -996,6 +996,13 @@ void syncCommand(client *c) {
         return;
     }
 
+    /* If client is pinned to an I/O thread, we need to get the client back to
+     * the main thread and then retry the command. */
+    if (c->io_thread_index >= 0) {
+        c->flags |= CLIENT_RETRY_COMMAND_ON_MAIN_THREAD;
+        return;
+    }
+
     serverLog(LL_NOTICE,"Replica %s asks for synchronization",
         replicationGetSlaveName(c));
 
@@ -2935,7 +2942,7 @@ write_error: /* Handle sendCommand() errors. */
 }
 
 int connectWithMaster(void) {
-    server.repl_transfer_s = connCreate(connTypeOfReplication());
+    server.repl_transfer_s = connCreate(connTypeOfReplication(), server.el);
     if (connConnect(server.repl_transfer_s, server.masterhost, server.masterport,
                 server.bind_source_addr, syncWithMaster) == C_ERR) {
         serverLog(LL_WARNING,"Unable to connect to MASTER: %s",
@@ -3406,7 +3413,7 @@ void replicationResurrectCachedMaster(connection *conn) {
     connSetPrivateData(server.master->conn, server.master);
     server.master->flags &= ~(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP);
     server.master->authenticated = 1;
-    server.master->lastinteraction = server.unixtime;
+    atomicSet(server.master->lastinteraction, server.unixtime);
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;
 
@@ -3743,11 +3750,13 @@ void replicationCron(void) {
     }
 
     /* Timed out master when we are an already connected slave? */
-    if (server.masterhost && server.repl_state == REPL_STATE_CONNECTED &&
-        (time(NULL)-server.master->lastinteraction) > server.repl_timeout)
-    {
-        serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");
-        freeClient(server.master);
+    if (server.masterhost && server.repl_state == REPL_STATE_CONNECTED) {
+        time_t lastinteraction;
+        atomicGet(server.master->lastinteraction, lastinteraction);
+        if (time(NULL) - lastinteraction > server.repl_timeout) {
+            serverLog(LL_WARNING,"MASTER timeout: no data nor PING received...");
+            freeClient(server.master);
+        }
     }
 
     /* Check if we should connect to a MASTER */
@@ -3941,7 +3950,9 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                     /* Skip slaves that don't match */
                     continue;
                 }
-                idle = server.unixtime - slave->lastinteraction;
+                time_t lastinteraction;
+                atomicGet(slave->lastinteraction, lastinteraction);
+                idle = server.unixtime - lastinteraction;
                 if (idle > max_idle) max_idle = idle;
                 slaves_waiting++;
                 mincapa = first ? slave->slave_capa : (mincapa & slave->slave_capa);

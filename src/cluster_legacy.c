@@ -1264,7 +1264,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth);
+        connection *conn = connCreateAccepted(connTypeOfCluster(), cfd, &require_auth, server.el);
 
         /* Make sure connection is not in an error state */
         if (connGetState(conn) != CONN_STATE_ACCEPTING) {
@@ -4143,7 +4143,9 @@ void clusterHandleSlaveFailover(void) {
     /* Set data_age to the number of milliseconds we are disconnected from
      * the master. */
     if (server.repl_state == REPL_STATE_CONNECTED) {
-        data_age = (mstime_t)(server.unixtime - server.master->lastinteraction)
+        time_t lastinteraction;
+        atomicGet(server.master->lastinteraction, lastinteraction);
+        data_age = (mstime_t)(server.unixtime - lastinteraction)
                    * 1000;
     } else {
         data_age = (mstime_t)(server.unixtime - server.repl_down_since) * 1000;
@@ -4486,7 +4488,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t handshake_
 
     if (node->link == NULL) {
         clusterLink *link = createClusterLink(node);
-        link->conn = connCreate(connTypeOfCluster());
+        link->conn = connCreate(connTypeOfCluster(), server.el);
         connSetPrivateData(link->conn, link);
         if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr,
                     clusterLinkConnectHandler) == C_ERR) {
