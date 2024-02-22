@@ -1166,7 +1166,11 @@ void syncCommand(client *c) {
  * - rdb-filter-only <include-filters>
  * Define "include" filters for the RDB snapshot. Currently we only support
  * a single include filter: "functions". Passing an empty string "" will
- * result in an empty RDB. */
+ * result in an empty RDB. 
+ * 
+ * - pseudo-master <0|1>
+ * Set this connection behaving like a master if server.pseudo_replica is true. 
+ * Sync tools can set their connections into 'pseudo-master' state to visit expired keys. */
 void replconfCommand(client *c) {
     int j;
 
@@ -1275,6 +1279,20 @@ void replconfCommand(client *c) {
                 }
             }
             sdsfreesplitres(filters, filter_count);
+        } else if (!strcasecmp(c->argv[j]->ptr,"pseudo-master")) {
+           /* REPLCONF PSEUDO-REPLICA is used to set this replica 
+            * into 'pseudo-replica' mode to avoid eviction and expiration.
+            * This is used for sync tools which eviction and expiration may 
+            * cause the data corruption. */
+            long pseudo_master = 0;
+            if (getRangeLongFromObjectOrReply(c, c->argv[j+1],
+                    0, 1, &pseudo_master, NULL) != C_OK)
+                return;
+            if (pseudo_master == 1) {
+                c->flags |= CLIENT_PSEUDO_MASTER;
+            } else {
+                c->flags &= ~CLIENT_PSEUDO_MASTER;
+            }
         } else {
             addReplyErrorFormat(c,"Unrecognized REPLCONF option: %s",
                 (char*)c->argv[j]->ptr);

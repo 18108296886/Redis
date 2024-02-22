@@ -1055,7 +1055,7 @@ void clientsCron(void) {
 void databasesCron(void) {
     /* Expire keys by random sampling. Not required for slaves
      * as master will synthesize DELs for us. */
-    if (server.active_expire_enabled) {
+    if (server.active_expire_enabled && !server.pseudo_replica) {
         if (iAmMaster()) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
         } else {
@@ -1682,7 +1682,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && iAmMaster())
+    if (server.active_expire_enabled && !server.pseudo_replica && iAmMaster())
         activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
     if (moduleCount()) {
@@ -2086,6 +2086,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.pause_cron = 0;
     server.dict_resizing = 1;
+    server.pseudo_replica = 0;
 
     server.latency_tracking_info_percentiles_len = 3;
     server.latency_tracking_info_percentiles = zmalloc(sizeof(double)*(server.latency_tracking_info_percentiles_len));
