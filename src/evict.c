@@ -434,18 +434,20 @@ int overMaxmemoryAfterAlloc(size_t moremem) {
  * eviction cycles until the "maxmemory" condition has resolved or there are no
  * more evictable items.  */
 static int isEvictionProcRunning = 0;
-static int evictionTimeProc(
+static aeTimeEventHandling evictionTimeProc(
         struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
 
-    if (performEvictions() == EVICT_RUNNING) return 0;  /* keep evicting */
+    if (performEvictions() == EVICT_RUNNING){
+        return (aeTimeEventHandling){.shouldRepeat = 1, .nextExecutionPeriod = 0}; /* keep evicting */
+    }
 
     /* For EVICT_OK - things are good, no need to keep evicting.
      * For EVICT_FAIL - there is nothing left to evict.  */
     isEvictionProcRunning = 0;
-    return AE_NOMORE;
+    return (aeTimeEventHandling){0};
 }
 
 void startEvictionTimeProc(void) {

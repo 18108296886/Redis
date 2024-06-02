@@ -9143,9 +9143,20 @@ typedef struct RedisModuleTimer {
     int dbid;                           /* Database number selected by the original client. */
 } RedisModuleTimer;
 
+static uint64_t calcNextExecutionPeriod(uint64_t expiretime) {
+    /* Next execution period should:
+       - not be negative (since it is returned as uint64_t)
+       - be greater than 0 (after conversion to ms).
+       To avoid casting to long long (to handle negative result of subtraction) and a second if clause (for handling cases that expiration
+       time would be 0 due to int division that happens during ms conversion), we can compare if the expiration time would be at least 
+       1000 microseconds greater than now in a single statement and return 1 otherwise */
+    uint64_t now = ustime();
+    return (expiretime >= now + 1000) ? (expiretime - now)/1000 : 1;
+}
+
 /* This is the timer handler that is called by the main event loop. We schedule
  * this timer to be called when the nearest of our module timers will expire. */
-int moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+static aeTimeEventHandling moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
@@ -9154,7 +9165,7 @@ int moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *client
     raxIterator ri;
     raxStart(&ri,Timers);
     uint64_t now = ustime();
-    long long next_period = 0;
+    aeTimeEventHandling handling = {0};
     while(1) {
         raxSeek(&ri,"^",NULL,0);
         if (!raxNext(&ri)) break;
@@ -9171,26 +9182,18 @@ int moduleTimerHandler(struct aeEventLoop *eventLoop, long long id, void *client
             raxRemove(Timers,(unsigned char*)ri.key,ri.key_len,NULL);
             zfree(timer);
         } else {
-            /* We call ustime() again instead of using the cached 'now' so that
-             * 'next_period' isn't affected by the time it took to execute
-             * previous calls to 'callback.
-             * We need to cast 'expiretime' so that the compiler will not treat
-             * the difference as unsigned (Causing next_period to be huge) in
-             * case expiretime < ustime() */
-            next_period = ((long long)expiretime-ustime())/1000; /* Scale to milliseconds. */
+            handling.shouldRepeat = 1; // We have at least one Timer not expired
+            handling.nextExecutionPeriod = calcNextExecutionPeriod(expiretime);
             break;
         }
     }
     raxStop(&ri);
 
-    /* Reschedule the next timer or cancel it. */
-    if (next_period <= 0) next_period = 1;
-    if (raxSize(Timers) > 0) {
-        return next_period;
-    } else {
+    if( !handling.shouldRepeat ){
         aeTimer = -1;
-        return AE_NOMORE;
     }
+
+    return handling;
 }
 
 /* Create a new timer that will fire after `period` milliseconds, and will call

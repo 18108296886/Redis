@@ -33,7 +33,6 @@
 #define AE_CALL_BEFORE_SLEEP (1<<3)
 #define AE_CALL_AFTER_SLEEP (1<<4)
 
-#define AE_NOMORE -1
 #define AE_DELETED_EVENT_ID -1
 
 /* Macros */
@@ -42,8 +41,13 @@
 struct aeEventLoop;
 
 /* Types and data structures */
+typedef struct aeTimeEventHandling {
+    int shouldRepeat;
+    monotime nextExecutionPeriod;
+} aeTimeEventHandling;
+
 typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
-typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
+typedef aeTimeEventHandling aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
