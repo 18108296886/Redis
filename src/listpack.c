@@ -2184,7 +2184,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         assert(lpLength(lp) == 0);
         assert(lp[LP_HDR_SIZE] == LP_EOF);
         assert(lpBytes(lp) == (LP_HDR_SIZE + 1));
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpFirst(lp);
@@ -2192,7 +2192,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         assert(lpLength(lp) == 0);
         assert(lp[LP_HDR_SIZE] == LP_EOF);
         assert(lpBytes(lp) == (LP_HDR_SIZE + 1));
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Delete whole listpack with negative index");
@@ -2202,7 +2202,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         assert(lpLength(lp) == 0);
         assert(lp[LP_HDR_SIZE] == LP_EOF);
         assert(lpBytes(lp) == (LP_HDR_SIZE + 1));
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpSeek(lp, -4);
@@ -2210,7 +2210,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         assert(lpLength(lp) == 0);
         assert(lp[LP_HDR_SIZE] == LP_EOF);
         assert(lpBytes(lp) == (LP_HDR_SIZE + 1));
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Delete inclusive range 0,0");
@@ -2219,14 +2219,14 @@ int listpackTest(int argc, char *argv[], int flags) {
         lp = lpDeleteRange(lp, 0, 1);
         assert(lpLength(lp) == 3);
         assert(lpSkip(lpLast(lp))[0] == LP_EOF); /* check set LP_EOF correctly */
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpFirst(lp);
         lp = lpDeleteRangeWithEntry(lp, &ptr, 1);
         assert(lpLength(lp) == 3);
         assert(lpSkip(lpLast(lp))[0] == LP_EOF); /* check set LP_EOF correctly */
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Delete inclusive range 0,1");
@@ -2235,14 +2235,14 @@ int listpackTest(int argc, char *argv[], int flags) {
         lp = lpDeleteRange(lp, 0, 2);
         assert(lpLength(lp) == 2);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[2], strlen(mixlist[2]));
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpFirst(lp);
         lp = lpDeleteRangeWithEntry(lp, &ptr, 2);
         assert(lpLength(lp) == 2);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[2], strlen(mixlist[2]));
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Delete inclusive range 1,2");
@@ -2251,14 +2251,14 @@ int listpackTest(int argc, char *argv[], int flags) {
         lp = lpDeleteRange(lp, 1, 2);
         assert(lpLength(lp) == 2);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[0], strlen(mixlist[0]));
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpSeek(lp, 1);
         lp = lpDeleteRangeWithEntry(lp, &ptr, 2);
         assert(lpLength(lp) == 2);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[0], strlen(mixlist[0]));
-        zfree(lp);
+        lpFree(lp);
     }
     
     TEST("Delete with start index out of range");
@@ -2266,7 +2266,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         lp = createList();
         lp = lpDeleteRange(lp, 5, 1);
         assert(lpLength(lp) == 4);
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Delete with num overflow");
@@ -2275,14 +2275,14 @@ int listpackTest(int argc, char *argv[], int flags) {
         lp = lpDeleteRange(lp, 1, 5);
         assert(lpLength(lp) == 1);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[0], strlen(mixlist[0]));
-        zfree(lp);
+        lpFree(lp);
 
         lp = createList();
         unsigned char *ptr = lpSeek(lp, 1);
         lp = lpDeleteRangeWithEntry(lp, &ptr, 5);
         assert(lpLength(lp) == 1);
         verifyEntry(lpFirst(lp), (unsigned char*)mixlist[0], strlen(mixlist[0]));
-        zfree(lp);
+        lpFree(lp);
     }
 
     TEST("Batch append") {
@@ -2506,7 +2506,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         /* Merge two empty listpacks, get empty result back. */
         lp1 = lpMerge(&lp1, &lp2);
         assert(lpLength(lp1) == 0);
-        zfree(lp1);
+        lpFree(lp1);
     }
 
     TEST("lpMerge two listpacks - first larger than second") {
@@ -2527,7 +2527,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         verifyEntry(lpSeek(lp3, 5), (unsigned char*)"much much longer non integer", 28);
         verifyEntry(lpSeek(lp3, 6), (unsigned char*)"hello", 5);
         verifyEntry(lpSeek(lp3, -1), (unsigned char*)"1024", 4);
-        zfree(lp3);
+        lpFree(lp3);
     }
 
     TEST("lpMerge two listpacks - second larger than first") {
@@ -2548,7 +2548,7 @@ int listpackTest(int argc, char *argv[], int flags) {
         verifyEntry(lpSeek(lp3, 3), (unsigned char*)"1024", 4);
         verifyEntry(lpSeek(lp3, 4), (unsigned char*)"4294967296", 10);
         verifyEntry(lpSeek(lp3, -1), (unsigned char*)"much much longer non integer", 28);
-        zfree(lp3);
+        lpFree(lp3);
     }
 
     TEST("lpNextRandom normal usage") {
