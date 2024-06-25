@@ -305,16 +305,16 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         }
 
         if (te->when <= now) {
-            int retval;
+            aeTimeEventHandling handling;
 
             id = te->id;
             te->refcount++;
-            retval = te->timeProc(eventLoop, id, te->clientData);
+            handling = te->timeProc(eventLoop, id, te->clientData);
             te->refcount--;
             processed++;
             now = getMonotonicUs();
-            if (retval != AE_NOMORE) {
-                te->when = now + (monotime)retval * 1000;
+            if (handling.shouldRepeat) {
+                te->when = now + handling.nextExecutionPeriod * 1000;
             } else {
                 te->id = AE_DELETED_EVENT_ID;
             }

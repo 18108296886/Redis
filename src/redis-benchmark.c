@@ -177,8 +177,8 @@ static redisContext *getRedisContext(const char *ip, int port,
 static void freeRedisConfig(redisConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
-int showThroughput(struct aeEventLoop *eventLoop, long long id,
-                   void *clientData);
+static aeTimeEventHandling showThroughput(struct aeEventLoop *eventLoop, long long id,
+                                          void *clientData);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -1633,9 +1633,10 @@ tls_usage,
     exit(exit_status);
 }
 
-int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+static aeTimeEventHandling showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(eventLoop);
     UNUSED(id);
+    aeTimeEventHandling handling = {.shouldRepeat = 1, .nextExecutionPeriod = SHOW_THROUGHPUT_INTERVAL};
     benchmarkThread *thread = (benchmarkThread *)clientData;
     int liveclients = 0;
     int requests_finished = 0;
@@ -1651,17 +1652,19 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     }
     if (config.num_threads && requests_finished >= config.requests) {
         aeStop(eventLoop);
-        return AE_NOMORE;
+        handling.shouldRepeat = 0;
+        handling.nextExecutionPeriod = 0;
+        return handling;
     }
-    if (config.csv) return SHOW_THROUGHPUT_INTERVAL;
+    if (config.csv) return handling;
     /* only first thread output throughput */
     if (thread != NULL && thread->index != 0) {
-        return SHOW_THROUGHPUT_INTERVAL;
+        return handling;
     }
     if (config.idlemode == 1) {
         printf("clients: %d\r", config.liveclients);
         fflush(stdout);
-        return SHOW_THROUGHPUT_INTERVAL;
+        return handling;
     }
     const float dt = (float)(current_tick-config.start)/1000.0;
     const float rps = (float)requests_finished/dt;
@@ -1674,7 +1677,7 @@ int showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData
     config.last_printed_bytes = printed_bytes;
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
-    return SHOW_THROUGHPUT_INTERVAL;
+    return handling;
 }
 
 /* Return true if the named test was selected using the -t command line

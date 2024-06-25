@@ -7,6 +7,7 @@
  */
 
 #include "server.h"
+#include "ae.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "slowlog.h"
@@ -1270,7 +1271,7 @@ void cronUpdateMemoryStats(void) {
  * a macro is used: run_with_period(milliseconds) { .... }
  */
 
-int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+static aeTimeEventHandling serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     int j;
     UNUSED(eventLoop);
     UNUSED(id);
@@ -1296,7 +1297,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* for debug purposes: skip actual cron work if pause_cron is on */
-    if (server.pause_cron) return 1000/server.hz;
+    if (server.pause_cron) {
+        return (aeTimeEventHandling){.shouldRepeat = 1, .nextExecutionPeriod = 1000/server.hz};
+    }  
 
     monotime cron_start = getMonotonicUs();
 
@@ -1535,7 +1538,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     server.el_cron_duration = getMonotonicUs() - cron_start;
 
-    return 1000/server.hz;
+    return (aeTimeEventHandling){.shouldRepeat = 1, .nextExecutionPeriod = 1000/server.hz};
 }
 
 
