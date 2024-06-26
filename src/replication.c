@@ -1599,6 +1599,9 @@ void updateSlavesWaitingBgsave(int bgsaveerr, int type) {
     while((ln = listNext(&li))) {
         client *slave = ln->value;
 
+        /* We can get here via freeClient()->killRDBChild()->checkChildrenDone(). skip disconnected slaves. */
+        if (!slave->conn) continue;
+
         if (slave->replstate == SLAVE_STATE_WAIT_BGSAVE_END) {
             struct redis_stat buf;
 
